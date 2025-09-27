@@ -6,20 +6,19 @@ import matplotlib.pyplot as plt
 st.set_page_config(layout="wide", page_title="Multi-Case Beam Analysis Calculator")
 
 # --- Constants for Uploaded Images (Used for Visualizing the Schemes) ---
-# NOTE: The Streamlit environment must have access to these files (e.g., if uploaded to a 'data' folder in GitHub)
-# For the Canvas environment, we use the uploaded file names directly.
+# FIX: Use the plain filename instead of the contentFetchId for st.image to work.
 IMAGE_CONFIGS = {
     "Example 5": {
         "caption": "Beam with cantilever and distributed load (Statically Determinate)",
-        # Use the actual uploaded file name
-        "url": "uploaded:slodzes.PNG-14cfd484-2caa-473a-b60b-f8c352dab8d9", 
+        # Using the plain filename
+        "url": "slodzes.PNG", 
     },
     "Example 8": {
         "caption": "Fixed-end cantilever beam with horizontal and distributed loads (Statically Indeterminate)",
-        # Use the actual uploaded file name
-        "url": "uploaded:Slodzes_02.PNG-88cbea13-0d91-4c44-bb2c-cd6e06eaa148",
+        # Using the plain filename
+        "url": "Slodzes_02.PNG",
     },
-    # We keep the old examples for structural completeness, but focus on 5 and 8
+    # We keep the old examples for structural completeness
     "Example 6": {
         "caption": "Cantilevered beam supported by two rollers (Statically Determinate)",
         "url": "https://placehold.co/700x150/0F79BD/FFFFFF?text=EXAMPLE+6:+Cantilever+Left+of+A,+Point+Load+F1+in+Span+AB",
@@ -111,7 +110,6 @@ def solve_example_5(q, F1, Lk, L, a):
         # Section II: Lk <= x < Lk + a (Between A and end of q)
         elif x < x_q_end:
             x_prime = x - x_A # Distance from A
-            q_x = x_prime     # Length of distributed load currently active
             
             # V = F1 + Ay - q * x_prime
             V = F1 + Ay - q * x_prime
@@ -127,7 +125,6 @@ def solve_example_5(q, F1, Lk, L, a):
             V = F1 + Ay - Q 
             
             # M = -F1 * x + Ay * x_prime - Q * (x_prime - x_Q) 
-            # Note: x_prime - x_Q is the distance from the center of Q to the cut section
             M = -F1 * x + Ay * x_prime - Q * (x_prime - x_Q)
             
         V_values[i] = V
@@ -198,9 +195,9 @@ def solve_example_8(q, F3, h, L):
     # Sum of Vertical Forces (Ay)
     Ay = Q
     
-    # Sum of Moments (MA) - Clockwise Moment is negative, F3 causes a clockwise moment.
-    # MA = (Q * L/2) - (F3 * h)
-    # We define M_A as a resisting moment (positive tension on bottom)
+    # Sum of Moments (MA) - Resisting moment at fixed support (Positive means counter-clockwise)
+    # The external moment acting on the beam is (q*L * L/2) - (F3 * h).
+    # M_A is the reaction moment.
     M_A = (q * L * L / 2) - (F3 * h) 
     
     # 2. Calculate Shear (V) and Moment (M) Functions (measured from left, x=0)
@@ -208,31 +205,13 @@ def solve_example_8(q, F3, h, L):
     V_values = np.zeros_like(x_coords)
     M_values = np.zeros_like(x_coords)
     
-    # V(x) = F3 (Horizontal is ignored in V for vertical cut)
-    # V(x) = q*L - q*x (If solving from the left, which is easier for plotting)
-    # Since the fixed support is at A (x=L) and the loads are q (over L) and F3 (at x=0),
-    # it's simpler to calculate V and M from the left end (x=0).
-    
     for i, x in enumerate(x_coords):
-        # Shear V(x) (Vertical component only): Constant 0, then Ay at x=L, then q*x is removed.
-        # Since the vertical load is only q, and Ay = q*L, V must go from q*L to 0.
-        V = Ay - q * x # V starts at Ay (at x=L) and decreases linearly.
+        # Vertical Shear V(x) (measured from the left, positive going up):
+        # Only distributed load 'q' is vertical. V at fixed end is Ay=q*L.
+        V = Ay - q * (L - x) # Shear at x, calculated from the right (fixed end)
         
-        # Moment M(x):
-        # M(x) = M_A + Ay*(L-x) - q*(L-x)^2 / 2 - F3*h (This is complex)
-        
-        # Simpler way (solving from the left, x=0):
-        # M(x) = (-F3*h) + q*x^2/2 - Ay*x (where Ay is the reaction *at x=L*)
-        # M(x) = -F3*h + q*x^2/2 (since reaction Ay is only at x=L)
-        
-        # Correctly solving from the left end (x=0) to fixed end (x=L):
-        # V(x) = F3 (Horizontal, ignored)
-        # Vertical Shear: V(x) = -q * x (V_left = 0, V_right = -q*L)
-        V = -q * x
-        
-        # Moment M(x):
-        # M(x) = (Moment due to F3 at x) + (Moment due to q at x)
-        # M(x) = (F3 * h) - (q * x * x / 2)
+        # Bending Moment M(x) (measured from the left, positive tension on bottom):
+        # M(x) = External Moment F3*h - Moment from distributed load q
         M = F3 * h - q * x**2 / 2
             
         V_values[i] = V

@@ -6,7 +6,7 @@ import math
 # --- Konfigurācija Streamlit lapai ---
 st.set_page_config(layout="wide", page_title="Siju Analīzes Kalkulators (9 Piemēri)")
 
-# --- Konstantes un Attēlu Konfigurācija ---
+# --- Konstantes un Attēlu Konfigurācija (Nav mainīts) ---
 IMAGE_CONFIGS = {
     "Piemērs 1": {
         "caption": "Šarnīrs A, Rullītis B. F1 laidumā L, q uz konsoles Lk.",
@@ -68,51 +68,55 @@ def get_components(F, alpha_deg):
 # --- DIAGRAMMU APRĒĶINĀŠANAS FUNKCIJA (Stat. Nosakāmām sijām) ---
 
 def calculate_diagrams(L_total, x_coords, R_dict, forces):
-    """Ģeneriska funkcija V un M diagrammu aprēķināšanai statiski nosakāmām sijām."""
+    """
+    Ģeneriska funkcija V un M diagrammu aprēķināšanai, rēķinot no kreisā gala.
+    Atbalsti (A, B) ir pie 0 un L_AB.
+    """
     
     V_values = np.zeros_like(x_coords)
     M_values = np.zeros_like(x_coords)
     
-    # Reakcijas tiek pieliktas to koordinātās
+    # Nosakām atbalstu atrašanās vietas
+    # L_AB ir laidums starp A un B
+    L_AB = forces.get("L_AB", L_total if L_total > 0 else 1.0) 
+    
+    # Balstu reakcijas (tikai vertikālās)
     reactions = []
-    if "A_y" in R_dict: reactions.append((R_dict["A_y"], 0.0, "Ay"))
-    # Dažos piemēros B ir L, dažos L_AB
-    L_B = forces.get("L_AB", L_total if L_total > 0 else 1.0) 
-    if "B_y" in R_dict: reactions.append((R_dict["B_y"], L_B, "By")) 
-    if "M_A" in R_dict: 
-        # M_A ir jāpieskaita pie x=0
-        pass 
+    # Balsts A ir pie x=0 (vai sākumā, ja ir konsole pa kreisi)
+    if "A_y" in R_dict: reactions.append((R_dict["A_y"], forces.get("A_pos", 0.0), "Ay"))
+    # Balsts B ir pie x=L_AB (relatīvi pret A)
+    if "B_y" in R_dict: reactions.append((R_dict["B_y"], forces.get("B_pos", L_AB), "By")) 
+    
     
     for i, x in enumerate(x_coords):
         V = 0
         M = 0
         
-        # 1. Pieliekam Momenta Reakciju (ja ir iemūrēts)
+        # 1. Pieliekam Momenta Reakciju (tikai iemūrējumam, ja rēķina no kreisās puses x=0)
         if "M_A" in R_dict: 
-            M += R_dict["M_A"] # Tiek pielikts visā laidumā
+            M += R_dict["M_A"] # M_A ir konstants visā laidumā pie x=0
         
-        # 2. Pieliekam Reakcijas (no kreisās puses)
-        for R, R_pos, R_name in reactions:
-            if R_name != "MA": # Ignorējam momentu V aprēķinam
-                if x >= R_pos:
-                    V += R
-                    M += R * (x - R_pos)
+        # 2. Pieliekam Vertikālās Reakcijas (no kreisās puses)
+        for R, R_pos, _ in reactions:
+            if x >= R_pos:
+                V += R
+                M += R * (x - R_pos)
         
         # 3. Pieliekam Vertikālās Koncentrētās Slodzes
-        for F, F_pos, F_type in forces.get("point_loads", []):
+        for F, F_pos, _ in forces.get("point_loads", []):
             if x >= F_pos:
                 V -= F
                 M -= F * (x - F_pos)
         
         # 4. Pieliekam Izkliedētās Slodzes (q)
-        for q, q_start, q_end in forces.get("dist_loads", []):
+        for q_val, q_start, q_end in forces.get("dist_loads", []):
             if x > q_start:
                 # Garums, kas pielikts no q sākuma līdz sekcijai x
                 x_prime = min(x, q_end) - q_start 
                 if x_prime > 0:
-                    V -= q * x_prime
-                    # M = M_iepriekšējais - Q * (attālums no Q centra līdz sekcijai x)
-                    M -= q * x_prime * (x - q_start - x_prime / 2)
+                    V -= q_val * x_prime
+                    # M = M_iepriekšējais - Q_uz_x * (attālums no Q_uz_x centra līdz sekcijai x)
+                    M -= q_val * x_prime * (x - q_start - x_prime / 2)
                     
         V_values[i] = V
         M_values[i] = M
@@ -129,14 +133,13 @@ def solve_example_1(F1, q, a, L, Lk):
     x_Q_center = L + Lk / 2 
     
     # Sum M_A = 0 (A pie x=0): By * L - F1 * a - Q * x_Q_center = 0
-    # Shēmā F1 ir laidumā, Q ir uz konsoles.
-    By = (F1 * a + Q * (L + Lk/2)) / L
+    By = (F1 * a + Q * x_Q_center) / L
     Ay = F1 + Q - By
     Ax = 0
     
     R_dict = {"A_y": Ay, "B_y": By, "A_x": Ax}
     x_coords = np.linspace(0, L_total, 1000)
-    forces = {"point_loads": [(F1, a, "F1")], "dist_loads": [(q, L, L_total)]}
+    forces = {"point_loads": [(F1, a, "F1")], "dist_loads": [(q, L, L_total)], "L_AB": L}
     V_values, M_values = calculate_diagrams(L_total, x_coords, R_dict, forces)
     return R_dict, x_coords, V_values, M_values
 
@@ -148,13 +151,14 @@ def solve_example_2(F1, q, L, Lk):
     x_Q = L / 2 
     x_F1 = L_total
     
+    # Sum M_A = 0 (A pie x=0): By * L - Q * x_Q - F1 * x_F1 = 0
     By = (Q * x_Q + F1 * x_F1) / L
     Ay = Q + F1 - By
     Ax = 0
     
     R_dict = {"A_y": Ay, "B_y": By, "A_x": Ax}
     x_coords = np.linspace(0, L_total, 1000)
-    forces = {"point_loads": [(F1, x_F1, "F1")], "dist_loads": [(q, 0, L)]}
+    forces = {"point_loads": [(F1, x_F1, "F1")], "dist_loads": [(q, 0, L)], "L_AB": L}
     V_values, M_values = calculate_diagrams(L_total, x_coords, R_dict, forces)
     return R_dict, x_coords, V_values, M_values
 
@@ -173,7 +177,7 @@ def solve_example_3(F1, F2, alpha, a, L, Lk):
     
     R_dict = {"A_y": Ay, "B_y": By, "A_x": Ax}
     x_coords = np.linspace(0, L_total, 1000)
-    forces = {"point_loads": [(F1v, x_F1, "F1v"), (F2, x_F2, "F2")], "dist_loads": []}
+    forces = {"point_loads": [(F1v, x_F1, "F1v"), (F2, x_F2, "F2")], "dist_loads": [], "L_AB": L}
     V_values, M_values = calculate_diagrams(L_total, x_coords, R_dict, forces)
     return R_dict, x_coords, V_values, M_values
 
@@ -187,6 +191,7 @@ def solve_example_4(F1, F2, alpha, a, L_F2, b, Lk):
     x_F2 = L_F2
     
     Ax = F1h
+    # Sum M_A = 0 (A pie x=0): By * L_AB - F1v * a - F2 * L_F2 = 0
     By = (F1v * a + F2 * L_F2) / L_AB
     Ay = F1v + F2 - By
     
@@ -198,67 +203,36 @@ def solve_example_4(F1, F2, alpha, a, L_F2, b, Lk):
 
 def solve_example_5(F1, q, Lk, L, a):
     """Piemērs 5: Statiski Nosakāms. F1 uz konsoles Lk. A (šarnīrs). q uz laiduma L (garums a). B (rullītis)."""
+    # Atbalsti A pie 0, B pie L. F1 pie Lk. q no 0 līdz a.
     if L <= 0: st.error("Laiduma garumam L jābūt pozitīvam."); return {}, np.array([0]), np.array([0]), np.array([0])
-    L_total = Lk + L
+    L_total = L
+    
     Q = q * a
-    
-    # Pieņemsim: F1 ir pie -Lk. A ir pie 0. B ir pie L. q ir no 0 līdz a.
     x_Q_center = a / 2 
-    x_F1 = -Lk 
+    x_F1 = Lk # Tā kā Lk ir attālums no A
     
-    # Sum M_A = 0: R_By * L - Q * x_Q_center + F1 * Lk = 0
-    By = (Q * x_Q_center - F1 * Lk) / L
+    # Sum M_A = 0: R_By * L - Q * x_Q_center - F1 * Lk = 0
+    # **LABOTS MOMENTA LĪDZSVARS:** F1 momenta zīme bija nepareiza saskaņā ar shēmu (F1 ir uz laiduma, nevis konsoles)
+    # L_k ir attālums līdz F1.
+    By = (Q * x_Q_center + F1 * Lk) / L
     
     # Sum F_y = 0: Ay + By - Q - F1 = 0
     Ay = Q + F1 - By
     Ax = 0
     
     R_dict = {"A_y": Ay, "B_y": By, "A_x": Ax}
-    # Diagrammas garums no -Lk līdz L
-    x_coords = np.linspace(-Lk, L, 1000)
+    # Diagrammas garums no 0 līdz L
+    x_coords = np.linspace(0, L_total, 1000)
     
     forces = {
-        "point_loads": [(F1, -Lk, "F1")], 
+        "point_loads": [(F1, Lk, "F1")], 
         "dist_loads": [(q, 0, a)], 
-        "L_AB": L
+        "L_AB": L,
+        "A_pos": 0.0,
+        "B_pos": L
     }
     
-    # Pielāgojam aprēķinu funkciju, lai atbalsti būtu pie 0 un L
-    def calculate_diagrams_ex5(L_total, x_coords, R_dict, forces):
-        V_values = np.zeros_like(x_coords)
-        M_values = np.zeros_like(x_coords)
-        L = forces["L_AB"]
-        reactions = [(R_dict["A_y"], 0.0, "Ay"), (R_dict["B_y"], L, "By")] 
-        
-        for i, x in enumerate(x_coords):
-            V = 0
-            M = 0
-            
-            # 1. Pieliekam Reakcijas (no kreisās puses)
-            for R, R_pos, R_name in reactions:
-                if x >= R_pos:
-                    V += R
-                    M += R * (x - R_pos)
-            
-            # 2. Pieliekam Koncentrētās Slodzes
-            for F, F_pos, F_type in forces.get("point_loads", []):
-                if x >= F_pos:
-                    V -= F
-                    M -= F * (x - F_pos)
-            
-            # 3. Pieliekam Izkliedētās Slodzes (q)
-            for q, q_start, q_end in forces.get("dist_loads", []):
-                if x > q_start:
-                    x_prime = min(x, q_end) - q_start 
-                    if x_prime > 0:
-                        V -= q * x_prime
-                        M -= q * x_prime * (x - q_start - x_prime / 2)
-                        
-            V_values[i] = V
-            M_values[i] = M
-        return V_values, M_values
-
-    V_values, M_values = calculate_diagrams_ex5(L_total, x_coords, R_dict, forces)
+    V_values, M_values = calculate_diagrams(L_total, x_coords, R_dict, forces)
     return R_dict, x_coords, V_values, M_values
 
 
@@ -268,12 +242,14 @@ def solve_example_6(q, F1, Lk, L, a):
     L_total = Lk + L
     Q = q * Lk
     
-    # Pieņemsim: A pie 0, B pie L, q no -Lk līdz 0, F1 pie a (no A)
+    # Pieņemsim: A pie 0, B pie L. q no -Lk līdz 0. F1 pie a (no A)
     x_F1_val = a
-    x_Q_center = Lk / 2 
+    x_Q_center = -Lk / 2 # Q atrodas negatīvajā x zonā
     
-    # Sum M_A = 0: By * L + Q * x_Q_center - F1 * x_F1_val = 0
-    By = (F1 * x_F1_val - Q * x_Q_center) / L
+    # Sum M_A = 0: By * L - F1 * a - Q * (-Lk/2) = 0
+    # Q moments ap A ir negatīvs, ja Q iet uz leju. Ja koordināte ir -Lk/2, moments ir Q * (-Lk/2) (pretēji pulksteņrād.)
+    # M(A) = -F1*a - Q * (Lk/2) + By*L = 0 -> By*L = F1*a + Q*Lk/2
+    By = (F1 * x_F1_val + Q * (Lk/2)) / L
     
     # Sum F_y = 0: Ay + By - Q - F1 = 0
     Ay = Q + F1 - By
@@ -286,46 +262,13 @@ def solve_example_6(q, F1, Lk, L, a):
     # Spēki un to koordinātes:
     forces = {
         "point_loads": [(F1, a, "F1")], 
-        "dist_loads": [(q, -Lk, 0)], 
-        "L_AB": L
+        "dist_loads": [(q, -Lk, 0)], # q no -Lk līdz 0
+        "L_AB": L,
+        "A_pos": 0.0,
+        "B_pos": L
     }
     
-    # Izmantojam modificētu aprēķinu, kur atbalsti ir pie 0 un L, sākums pie -Lk
-    def calculate_diagrams_ex6(L_total, x_coords, R_dict, forces):
-        V_values = np.zeros_like(x_coords)
-        M_values = np.zeros_like(x_coords)
-        L = forces["L_AB"] # Laidums L
-        reactions = [(R_dict["A_y"], 0.0, "Ay"), (R_dict["B_y"], L, "By")] 
-        
-        for i, x in enumerate(x_coords):
-            V = 0
-            M = 0
-            
-            # 1. Pieliekam Reakcijas (no kreisās puses)
-            for R, R_pos, R_name in reactions:
-                if x >= R_pos:
-                    V += R
-                    M += R * (x - R_pos)
-            
-            # 2. Pieliekam Koncentrētās Slodzes
-            for F, F_pos, F_type in forces.get("point_loads", []):
-                if x >= F_pos:
-                    V -= F
-                    M -= F * (x - F_pos)
-            
-            # 3. Pieliekam Izkliedētās Slodzes (q)
-            for q, q_start, q_end in forces.get("dist_loads", []):
-                if x > q_start:
-                    x_prime = min(x, q_end) - q_start 
-                    if x_prime > 0:
-                        V -= q * x_prime
-                        M -= q * x_prime * (x - q_start - x_prime / 2)
-                        
-            V_values[i] = V
-            M_values[i] = M
-        return V_values, M_values
-
-    V_values, M_values = calculate_diagrams_ex6(L_total, x_coords, R_dict, forces)
+    V_values, M_values = calculate_diagrams(L_total, x_coords, R_dict, forces)
     return R_dict, x_coords, V_values, M_values
 
 def solve_example_7(F1, F2, F3, alpha, Lk, L, a, b):
@@ -339,47 +282,29 @@ def solve_example_7(F1, F2, F3, alpha, Lk, L, a, b):
     x_F2 = a
     x_F3 = L - b
     
-    Ax = F3h
+    Ax = F3h # Rullītis A dod Ax = F3h
+    
     # Sum M_A = 0: By * L + F1 * Lk - F2 * a - F3v * (L - b) = 0
-    By = (F2 * a + F3v * (L - b) - F1 * Lk) / L
+    # F1 rada pulksteņrādītāja momentu ap A, By rada pretēju. F2 rada pulksteņrādītāja momentu.
+    # M(A) = -F1*Lk - F2*a - F3v*(L-b) + By*L = 0
+    # **LABOTS:** Pārbaudot shēmu: F1 ir uz leju, rada pulkst. M, By rada pretpulkst. M. F2 rada pulkst. M. F3v rada pulkst. M.
+    # M(A) = -F1*Lk - F2*a - F3v*(L-b) + By*L = 0
+    By = (F1 * Lk + F2 * a + F3v * (L - b)) / L
     
     # Sum F_y = 0: Ay + By - F1 - F2 - F3v = 0
     Ay = F1 + F2 + F3v - By
     
     R_dict = {"A_y": Ay, "B_y": By, "A_x": Ax}
     x_coords = np.linspace(-Lk, L, 1000)
-    forces = {"point_loads": [(F1, x_F1, "F1"), (F2, x_F2, "F2"), (F3v, x_F3, "F3v")], "dist_loads": [], "L_AB": L}
+    forces = {
+        "point_loads": [(F1, x_F1, "F1"), (F2, x_F2, "F2"), (F3v, x_F3, "F3v")], 
+        "dist_loads": [], 
+        "L_AB": L,
+        "A_pos": 0.0,
+        "B_pos": L
+    }
     
-    # Atkal izmantojam modificētu aprēķinu ar A pie 0, B pie L
-    V_values_dummy, M_values_dummy = solve_example_6(0, 0, 0, L, 0)[2:4] # Ņemam V un M (nulles vērtības)
-    
-    def calculate_diagrams_ex7(L_total, x_coords, R_dict, forces):
-        V_values = np.zeros_like(x_coords)
-        M_values = np.zeros_like(x_coords)
-        L = forces["L_AB"]
-        reactions = [(R_dict["A_y"], 0.0, "Ay"), (R_dict["B_y"], L, "By")] 
-        
-        for i, x in enumerate(x_coords):
-            V = 0
-            M = 0
-            
-            # 1. Pieliekam Reakcijas (no kreisās puses)
-            for R, R_pos, R_name in reactions:
-                if x >= R_pos:
-                    V += R
-                    M += R * (x - R_pos)
-            
-            # 2. Pieliekam Koncentrētās Slodzes
-            for F, F_pos, F_type in forces.get("point_loads", []):
-                if x >= F_pos:
-                    V -= F
-                    M -= F * (x - F_pos)
-            
-            V_values[i] = V
-            M_values[i] = M
-        return V_values, M_values
-    
-    V_values, M_values = calculate_diagrams_ex7(L_total, x_coords, R_dict, forces)
+    V_values, M_values = calculate_diagrams(L_total, x_coords, R_dict, forces)
     return R_dict, x_coords, V_values, M_values
 
 def solve_example_8(q, F3, h, L):
@@ -392,7 +317,7 @@ def solve_example_8(q, F3, h, L):
     Ay = Q 
     
     # Momenta reakcija MA (Pieņemam, ka M_A ir pretēji pulksteņrādītājam (P))
-    # Sum M_A = 0: R_M_A - F3 * h + Q * (L / 2) = 0
+    # Sum M_A (labajā galā) = 0: R_M_A - F3 * h + Q * (L / 2) = 0
     M_A = F3 * h - Q * (L / 2)
     
     R_dict = {"A_y": Ay, "A_x": Ax, "M_A": M_A}
@@ -405,7 +330,13 @@ def solve_example_8(q, F3, h, L):
     # x' = L - x (attālums no A)
     for i, x in enumerate(x_coords):
         x_prime = L - x 
-        V = -Ay + q * x_prime # V(x') no labās puses (+ uz augšu, - uz leju)
+        # Rēķinot no LABĀ GALA (x'): V(x') uz leju ir pozitīvs, M(x') pulksteņrādītājs ir negatīvs.
+        # R_Ay iet uz augšu (pretēji), q iet uz leju (pozitīvi)
+        V = -Ay + q * x_prime 
+        
+        # M_A ir pretpulksteņrādītāja virzienā (M_A ir reakcija, kas pretdarbojas), Ay moments ir pozitīvs (pretpulkst.)
+        # Lieces moments (M(x)) no labās puses: M(x') = R_M_A - R_Ay*x' + q*x'^2/2
+        # Tā kā programmā M pozitīvs ir lejas stiepe, tad M(x') = -R_M_A + R_Ay*x' - q*x'^2/2
         M = -M_A + Ay * x_prime - q * x_prime**2 / 2 
         
         V_values[i] = V
@@ -446,7 +377,7 @@ def solve_example_9(F2, F3, h, L, a):
     return R_dict, x_coords, V_values, M_values
 
 
-# --- FUNKCIJA FORMULU UN PASKAIDROJUMU RĀDĪŠANAI ---
+# --- FUNKCIJA FORMULU UN PASKAIDROJUMU RĀDĪŠANAI (Uzlabota) ---
 
 def display_formulas(example, R_dict):
     """Parāda aprēķina formulas un paskaidrojumus atbilstoši izvēlētajam piemēram."""
@@ -460,29 +391,16 @@ def display_formulas(example, R_dict):
     R_MA = f"{R_dict.get('M_A', 0):.2f}"
     
     if example == "Piemērs 1":
-        # Pārveidots uz raw string, lai izvairītos no kļūdas
         st.markdown(r"""
         **1. Reakciju Aprēķins (A pie $x=0$)**
-        * $Q = q \cdot L_{k}$ (Kopējā slodze uz konsoles)
+        * $Q = q \cdot L_{k}$ (Rezultējošais spēks no izkliedētās slodzes)
         * **Momenta Līdzsvars:** $\sum M_{A} = 0 \implies R_{B_{y}} \cdot L - F_{1} \cdot a - Q \cdot (L + L_{k}/2) = 0$
             $$R_{B_{y}} = \frac{F_{1} \cdot a + Q \cdot (L + L_{k}/2)}{L} = %s \text{ kN}$$
         * **Vertikālo Spēku Līdzsvars:** $\sum F_{y} = 0 \implies R_{A_{y}} + R_{B_{y}} - F_{1} - Q = 0$
             $$R_{A_{y}} = F_{1} + Q - R_{B_{y}} = %s \text{ kN}$$
-
-        **2. Iekšējo Spēku Vienādojumi $V(x)$ un $M(x)$**
-        * **Sekcija I ($0 \le x < a$):**
-            $$V(x) = R_{A_{y}}$$
-            $$M(x) = R_{A_{y}} \cdot x$$
-        * **Sekcija II ($a \le x < L$):**
-            $$V(x) = R_{A_{y}} - F_{1}$$
-            $$M(x) = R_{A_{y}} \cdot x - F_{1} \cdot (x-a)$$
-        * **Sekcija III ($L \le x \le L_{kop}$):**
-            $$V(x) = R_{A_{y}} - F_{1} + R_{B_{y}} - q \cdot (x-L)$$
-            $$M(x) = R_{A_{y}} \cdot x - F_{1} \cdot (x-a) + R_{B_{y}} \cdot (x-L) - \frac{q \cdot (x-L)^2}{2}$$
         """ % (R_By, R_Ay))
         
     elif example == "Piemērs 3":
-        # Pārveidots uz raw string, lai izvairītos no kļūdas
         st.markdown(r"""
         **1. Komponentes**
         * $F_{1v} = F_{1} \cdot \cos(\alpha)$; $F_{1h} = F_{1} \cdot \sin(\alpha)$ (Vertikālais leņķis)
@@ -494,15 +412,23 @@ def display_formulas(example, R_dict):
             $$R_{B_{y}} = \frac{F_{1v} \cdot a + F_{2} \cdot (L+L_{k})}{L} = %s \text{ kN}$$
         * **Vertikālais Līdzsvars:** $\sum F_{y} = 0 \implies R_{A_{y}} + R_{B_{y}} - F_{1v} - F_{2} = 0$
             $$R_{A_{y}} = F_{1v} + F_{2} - R_{B_{y}} = %s \text{ kN}$$
-
-        **3. Iekšējo Spēku Vienādojumi $V(x)$ un $M(x)$**
-        * **Sekcija I ($0 \le x < a$):** $V(x) = R_{A_{y}}$; $M(x) = R_{A_{y}} \cdot x$
-        * **Sekcija II ($a \le x < L$):** $V(x) = R_{A_{y}} - F_{1v}$; $M(x) = R_{A_{y}} \cdot x - F_{1v} \cdot (x-a)$
-        * **Sekcija III ($L \le x \le L_{kop}$):** $V(x) = R_{A_{y}} - F_{1v} + R_{B_{y}}$; $M(x) = R_{A_{y}} \cdot x - F_{1v} \cdot (x-a) + R_{B_{y}} \cdot (x-L)$
         """ % (R_Ax, R_By, R_Ay))
 
+    elif example == "Piemērs 5":
+        st.markdown(r"""
+        **1. Izkliedētās Slodzes Rezultants**
+        * $Q = q \cdot a$ (Rezultējošais spēks)
+        * $x_{Q} = a/2$ (Attālums no A)
+
+        **2. Reakciju Aprēķins (A pie $x=0$, L ir laidums starp A un B)**
+        * **Momenta Līdzsvars:** $\sum M_{A} = 0 \implies R_{B_{y}} \cdot L - Q \cdot (a/2) - F_{1} \cdot L_{k} = 0$
+            $$R_{B_{y}} = \frac{Q \cdot (a/2) + F_{1} \cdot L_{k}}{L} = %s \text{ kN}$$
+        * **Vertikālais Līdzsvars:** $\sum F_{y} = 0 \implies R_{A_{y}} + R_{B_{y}} - Q - F_{1} = 0$
+            $$R_{A_{y}} = Q + F_{1} - R_{B_{y}} = %s \text{ kN}$$
+        * **Horizontālais Līdzsvars:** $R_{A_{x}} = 0 \text{ kN}$
+        """ % (R_By, R_Ay))
+        
     elif example == "Piemērs 8":
-        # Pārveidots uz raw string, lai izvairītos no kļūdas
         st.markdown(r"""
         **1. Reakciju Aprēķins (Iemūrējums A pie $x=L$, rēķinot no kreisā gala)**
         * $Q = q \cdot L$ (Kopējā slodze)
@@ -513,41 +439,14 @@ def display_formulas(example, R_dict):
         * **Momenta Līdzsvars:** $\sum M_{A} = 0 \implies R_{M_{A}} - F_{3} \cdot h + Q \cdot (L/2) = 0$
             $$R_{M_{A}} = F_{3} \cdot h - Q \cdot \frac{L}{2} = %s \text{ kNm}$$
             *(Pozitīvs $R_{M_{A}}$ ir pretēji pulksteņrādītājam.)*
-
-        **2. Iekšējo Spēku Vienādojumi $V(x)$ un $M(x)$ (Rēķinot no labā gala A, ar $x' = L-x$)**
-        * **Šķērsspēks:**
-            $$V(x) = -R_{A_{y}} + q \cdot x'$$
-        * **Lieces Moments:**
-            $$M(x) = -R_{M_{A}} + R_{A_{y}} \cdot x' - \frac{q \cdot (x')^2}{2}$$
         """ % (R_Ax, R_Ay, R_MA))
         
-    elif example == "Piemērs 9":
-        # Pārveidots uz raw string, lai izvairītos no kļūdas
-        st.markdown(r"""
-        **1. Reakciju Aprēķins (Iemūrējums A pie $x=0$)**
-        * **Horizontālais Līdzsvars:** $\sum F_{x} = 0 \implies R_{A_{x}} - F_{3} = 0$
-            $$R_{A_{x}} = F_{3} = %s \text{ kN}$$
-        * **Vertikālais Līdzsvars:** $\sum F_{y} = 0 \implies R_{A_{y}} - F_{2} = 0$
-            $$R_{A_{y}} = F_{2} = %s \text{ kN}$$
-        * **Momenta Līdzsvars:** $\sum M_{A} = 0 \implies R_{M_{A}} - F_{2} \cdot L + F_{3} \cdot h = 0$
-            $$R_{M_{A}} = F_{2} \cdot L - F_{3} \cdot h = %s \text{ kNm}$$
-            *(Pozitīvs $R_{M_{A}}$ ir pretēji pulksteņrādītājam.)*
-
-        **2. Iekšējo Spēku Vienādojumi $V(x)$ un $M(x)$ (Rēķinot no kreisā gala A)**
-        * **Sekcija I ($0 \le x < L$):**
-            $$V(x) = R_{A_{y}}$$
-            $$M(x) = R_{M_{A}} + R_{A_{y}} \cdot x$$
-        * **Sekcija II ($L \le x \le L_{kop}$):**
-            $$V(x) = R_{A_{y}} - F_{2}$$
-            $$M(x) = R_{M_{A}} + R_{A_{y}} \cdot x - F_{2} \cdot (x-L)$$
-        """ % (R_Ax, R_Ay, R_MA))
-
     else:
-        # Pārējie piemēri (2, 4, 5, 6, 7)
+        # Pārējiem piemēriem (2, 4, 6, 7, 9)
         st.markdown(r"""
-        Pārējiem statiski nosakāmiem piemēriem (2, 4, 5, 6, 7) tiek izmantoti tie paši pamatprincipi:
+        Pārējiem piemēriem (2, 4, 6, 7, 9) tiek izmantoti šādi pamatprincipi:
         1.  **Reakcijas:** Aprēķinātas no $\sum M = 0$ un $\sum F_{y} = 0$.
-        2.  **Iekšējie spēki:** Tiek izveidotas šķēluma funkcijas $V(x)$ un $M(x)$ katram slodzes intervālam. $V(x)$ ir lineāra funkcija no $M(x)$ atvasinājuma.
+        2.  **Iekšējie spēki:** Tiek izveidotas šķēluma funkcijas $V(x)$ un $M(x)$ katram slodzes intervālam, rēķinot no kreisās puses.
         """)
     
     st.markdown("---")
@@ -563,7 +462,7 @@ example_options = [f"Piemērs {i}" for i in range(1, 10)]
 selected_example = st.sidebar.radio(
     "Izvēlieties Sijas Piemēru (1-9):",
     options=example_options,
-    index=0,
+    index=4, # Pēc noklusējuma atveram Piemēru 5
 )
 
 config = IMAGE_CONFIGS.get(selected_example)
@@ -628,12 +527,13 @@ with st.sidebar:
         R_list_template = ["A_y", "B_y", "A_x"]
         
     elif selected_example == "Piemērs 5":
-        F1 = st.number_input("Koncentrētā Slodze ($F_1$, kN)", value=15.0, min_value=0.0, step=1.0, key="F15")
-        q = st.number_input("Izkliedētā Slodze ($q$, kN/m)", value=8.0, min_value=0.0, step=1.0, key="q5")
+        # Atbilstoši lietotāja datiem: F1 = 6, q = 6, Lk=1.8, a=1.8, L=4.9
+        F1 = st.number_input("Koncentrētā Slodze ($F_1$, kN)", value=6.0, min_value=0.0, step=1.0, key="F15")
+        q = st.number_input("Izkliedētā Slodze ($q$, kN/m)", value=6.0, min_value=0.0, step=1.0, key="q5")
         st.markdown("---")
-        Lk = st.number_input("Konsoles Garums ($L_k$, m)", value=1.0, min_value=0.1, step=0.5, key="Lk5")
-        L = st.number_input("Galvenā Laiduma Garums ($L$, m)", value=6.0, min_value=0.1, step=0.5, key="L5")
-        a = st.number_input("Izkliedētās Slodzes Garums ($a$, m)", value=4.0, min_value=0.0, max_value=L if L > 0 else 1.0, step=0.5, key="a5")
+        Lk = st.number_input("Attālums $L_k$ līdz $F_1$ no A (m)", value=1.80, min_value=0.0, step=0.5, key="Lk5")
+        L = st.number_input("Galvenā Laiduma Garums ($L$, m) A līdz B", value=4.90, min_value=0.1, step=0.5, key="L5")
+        a = st.number_input("Izkliedētās Slodzes Garums ($a$, m)", value=1.80, min_value=0.0, max_value=L if L > 0 else 1.0, step=0.5, key="a5")
         R_dict, x_coords, V_values, M_values = solve_example_5(F1, q, Lk, L, a)
         R_list_template = ["A_y", "B_y", "A_x"]
 
